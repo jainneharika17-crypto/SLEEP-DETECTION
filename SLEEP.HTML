@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Sleep Guard - 3s Delay</title>
+    
+    <!-- Load MediaPipe Face Mesh and Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { 
+            text-align: center; 
+            font-family: 'Segoe UI', sans-serif; 
+            background: #0f172a; 
+            color: white; 
+            margin: 0; 
+            padding: 20px; 
+        }
+        .container { position: relative; display: inline-block; margin-top: 20px; }
+        canvas { 
+            transform: scaleX(-1); 
+            border: 5px solid #334155; 
+            border-radius: 20px; 
+            background: #000;
+            max-width: 95%;
+        }
+        #status { 
+            font-size: 2rem; 
+            font-weight: bold; 
+            margin: 20px 0; 
+            color: #22c55e; 
+            min-height: 3rem;
+        }
+        .warning { color: #ef4444 !important; }
+        #timer-box { 
+            font-size: 1.2rem; 
+            color: #94a3b8; 
+            margin-bottom: 10px;
+        }
+        .start-btn {
+            padding: 15px 35px;
+            font-size: 1.1rem;
+            background: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .start-btn:hover { background: #1d4ed8; }
+    </style>
+</head>
+<body>
+
+    <h1>AI Sleep Guard</h1>
+    <p>Closes eyes for <strong>1 second</strong> to trigger the alarm.</p>
+    
+    <button id="start-btn" class="start-btn">Start Camera & AI</button>
+    
+    <div id="status">Ready to Start</div>
+    <div id="timer-box">Timer: 0.0s</div>
+
+    <div class="container">
+        <video id="webcam" style="display:none;" playsinline></video>
+        <canvas id="output"></canvas>
+    </div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('output');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const timerDiv = document.getElementById('timer-box');
+        const startBtn = document.getElementById('start-btn');
+
+        let eyesClosedStartTime = null;
+        const ALARM_DELAY = 1000; // 1 seconds
+        let isBeeping = false;
+
+        // --- AUDIO GENERATOR ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        function playTripleBeep() {
+            if (isBeeping) return;
+            isBeeping = true;
+            
+            let count = 0;
+            const interval = setInterval(() => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                osc.frequency.value = 1000;
+                osc.start();
+                gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.4);
+                osc.stop(audioCtx.currentTime + 0.4);
+                
+                count++;
+                if (count >= 3) {
+                    clearInterval(interval);
+                    setTimeout(() => isBeeping = false, 1000); // Cooldown
+                }
+            }, 500);
+        }
+
+        // --- AI FACE TRACKING ---
+        const faceMesh = new FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults((results) => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const landmarks = results.multiFaceLandmarks[0];
+                
+                // Landmarks: 159 (Top Eyelid), 145 (Bottom Eyelid)
+                const eyeDistance = Math.abs(landmarks[159].y - landmarks[145].y);
+
+                if (eyeDistance < 0.013) { 
+                    // Eyes are CLOSED
+                    if (!eyesClosedStartTime) eyesClosedStartTime = Date.now();
+                    
+                    const elapsed = Date.now() - eyesClosedStartTime;
+                    timerDiv.innerText = `Timer: ${(elapsed/1000).toFixed(1)}s`;
+
+                    if (elapsed >= ALARM_DELAY) {
+                        statusDiv.innerText = "WAKE UP!!!";
+                        statusDiv.className = "warning";
+                        playTripleBeep();
+                    } else {
+                        statusDiv.innerText = "Eyes Closed Detected...";
+                    }
+                } else {
+                    // Eyes are OPEN: Reset timer
+                    eyesClosedStartTime = null;
+                    statusDiv.innerText = "Monitoring...";
+                    statusDiv.className = "";
+                    timerDiv.innerText = "Timer: 0.0s (Blink Filter Active)";
+                }
+            } else {
+                statusDiv.innerText = "No Face Found";
+            }
+        });
+
+        // --- STARTUP ---
+        async function startSystem() {
+            try {
+                startBtn.style.display = 'none';
+                statusDiv.innerText = "Requesting Camera...";
+                
+                if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+                const camera = new Camera(video, {
+                    onFrame: async () => {
+                        await faceMesh.send({image: video});
+                    },
+                    width: 640,
+                    height: 480
+                });
+                
+                await camera.start();
+                statusDiv.innerText = "System Active";
+            } catch (err) {
+                statusDiv.innerText = "Error: Camera Denied";
+                startBtn.style.display = 'inline-block';
+            }
+        }
+
+        startBtn.addEventListener('click', startSystem);
+    </script>
+</body>
+</html>
