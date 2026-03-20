@@ -1,0 +1,1 @@
+The Real-Time Sleep Detection Web App is a browser-based safety tool that uses Computer Vision and Artificial Intelligence to monitor a user's alertness. It acts as a "digital co-pilot" by analyzing a live video feed to identify the physiological signs of sleep (closed eyelids) and triggering an audible intervention if those signs persist
